@@ -38,6 +38,7 @@ def get_header_rating(header, value):
             'recommendation': 'Should be set to 1; mode=block'
         }
     }
+    
     if header not in header_checks:
         return 'info', ''
         
@@ -48,6 +49,7 @@ def get_header_rating(header, value):
         return 'good', ''
     else:
         return 'warning', header_checks[header]['recommendation']
+
 def print_colored_header(header, value, status, recommendation=''):
     """Print header information with appropriate coloring"""
     color = {
@@ -67,15 +69,17 @@ def print_colored_header(header, value, status, recommendation=''):
     print(f"{color[status]}{status_symbol[status]} {header}: {value}{Style.RESET_ALL}")
     if recommendation:
         print(f"{Fore.YELLOW}   → Recommendation: {recommendation}{Style.RESET_ALL}")
+
 def check_security_headers():
-    print(f"{Fore.CYAN}Security Headers Checker v2.0{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}Security Headers Checker v2.0 By Ij{Style.RESET_ALL}")
     print(f"{Fore.CYAN}========================={Style.RESET_ALL}\n")
     
     website = input(f"{Fore.CYAN}Enter the website URL (e.g., https://example.com): {Style.RESET_ALL}").strip()
-
+    
     if not website.startswith(('http://', 'https://')):
         print(f"{Fore.RED}Error: Please provide a valid URL starting with http:// or https://{Style.RESET_ALL}")
         return
+    
     if not website.startswith('https://'):
         print(f"{Fore.RED}Warning: The website is not using HTTPS. This is a security risk.{Style.RESET_ALL}")
     headers = {
@@ -99,6 +103,7 @@ def check_security_headers():
         except socket.gaierror:
             print(f"{Fore.RED}Error: Cannot resolve domain {domain}. Please check if the URL is correct.{Style.RESET_ALL}")
             return
+
         print(f"{Fore.YELLOW}Connecting to {website}...{Style.RESET_ALL}")
         with requests.Session() as session:
             response = session.head(
@@ -121,6 +126,7 @@ def check_security_headers():
         }
         print(f"\n{Fore.CYAN}Results for {website}:{Style.RESET_ALL}")
         print(f"{Fore.CYAN}{'-' * 50}{Style.RESET_ALL}")
+        
         missing_critical_headers = 0
         warnings = 0
         print(f"\n{Fore.CYAN}Security Headers Analysis:{Style.RESET_ALL}")
@@ -143,7 +149,7 @@ def check_security_headers():
         print(f"\n{Fore.CYAN}Additional Response Headers:{Style.RESET_ALL}")
         for header, value in response.headers.items():
             if header not in security_headers:
-                print_colored_header(header, value, 'info')    
+                print_colored_header(header, value, 'info')
     except requests.exceptions.SSLError as e:
         print(f"{Fore.RED}SSL Error: Cannot verify the website's security certificate.{Style.RESET_ALL}")
         print(f"Details: {str(e)}")
@@ -154,6 +160,7 @@ def check_security_headers():
         print("2. Verify if the website is accessible in your browser")
         print("3. The website might be blocking automated requests")
         print("4. Try using a VPN or proxy if the site is geo-restricted")
+    
     except requests.exceptions.ConnectionError as e:
         print(f"{Fore.RED}Connection Error: Cannot establish connection to the server.{Style.RESET_ALL}")
         print(f"{Fore.YELLOW}Possible causes:{Style.RESET_ALL}")
@@ -164,6 +171,7 @@ def check_security_headers():
     except requests.exceptions.RequestException as e:
         print(f"{Fore.RED}Error checking headers: {str(e)}{Style.RESET_ALL}")
         print("Please verify the website is accessible in your browser.")
+
 if __name__ == "__main__":
     try:
         check_security_headers()
