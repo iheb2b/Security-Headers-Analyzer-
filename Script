@@ -1,183 +1,282 @@
 import requests
 from urllib.parse import urlparse
 import sys
-from colorama import init, Fore, Back, Style
 import socket
+import time
+import random
+from colorama import init, Fore, Back, Style
+import re
+from typing import Dict, Tuple, Optional, List, Any 
+
 init()
-def get_header_rating(header, value):
-    """
-    Evaluate security headers and provide ratings and recommendations
-    """
-    header_checks = {
-        'Strict-Transport-Security': {
-            'check': lambda x: 'max-age=' in x.lower() and int(x.lower().split('max-age=')[1].split(';')[0]) >= 31536000,
-            'recommendation': 'Should be set with a max-age of at least 1 year (31536000 seconds)'
-        },
-        'Content-Security-Policy': {
-            'check': lambda x: len(x) > 0 and 'default-src' in x.lower(),
-            'recommendation': 'Should include at least default-src directive'
-        },
-        'X-Frame-Options': {
-            'check': lambda x: x.upper() in ['DENY', 'SAMEORIGIN'],
-            'recommendation': 'Should be set to DENY or SAMEORIGIN'
-        },
-        'X-Content-Type-Options': {
-            'check': lambda x: x.lower() == 'nosniff',
-            'recommendation': 'Should be set to nosniff'
-        },
-        'Referrer-Policy': {
-            'check': lambda x: x.lower() in ['no-referrer', 'strict-origin', 'strict-origin-when-cross-origin'],
-            'recommendation': 'Should be set to no-referrer, strict-origin, or strict-origin-when-cross-origin'
-        },
-        'Permissions-Policy': {
-            'check': lambda x: len(x) > 0,
-            'recommendation': 'Should be configured to restrict unnecessary browser features'
-        },
-        'X-XSS-Protection': {
-            'check': lambda x: x in ['1; mode=block', '1'],
-            'recommendation': 'Should be set to 1; mode=block'
+
+MINIMUM_HSTS_AGE = 31536000 
+DEFAULT_TIMEOUT = 30
+VALID_REFERRER_POLICIES = ['no-referrer', 'strict-origin', 'strict-origin-when-cross-origin']
+MAX_RETRIES = 3
+RETRY_DELAY_MIN = 3
+RETRY_DELAY_MAX = 5
+
+class SecurityHeaderChecker:
+    def __init__(self):
+        self.header_checks = {
+            'Strict-Transport-Security': {
+                'check': self._check_hsts,
+                'recommendation': f'Should be set with a max-age of at least 1 year ({MINIMUM_HSTS_AGE} seconds)'
+            },
+            'Content-Security-Policy': {
+                'check': lambda x: len(x) > 0 and 'default-src' in x.lower(),
+                'recommendation': 'Should include at least default-src directive'
+            },
+            'X-Frame-Options': {
+                'check': lambda x: x.upper() in ['DENY', 'SAMEORIGIN'],
+                'recommendation': 'Should be set to DENY or SAMEORIGIN'
+            },
+            'X-Content-Type-Options': {
+                'check': lambda x: x.lower() == 'nosniff',
+                'recommendation': 'Should be set to nosniff'
+            },
+            'Referrer-Policy': {
+                'check': lambda x: x.lower() in VALID_REFERRER_POLICIES,
+                'recommendation': 'Should be set to no-referrer, strict-origin, or strict-origin-when-cross-origin'
+            },
+            'Permissions-Policy': {
+                'check': lambda x: len(x) > 0,
+                'recommendation': 'Should be configured to restrict unnecessary browser features'
+            },
+            'X-XSS-Protection': {
+                'check': lambda x: x in ['1; mode=block', '1'],
+                'recommendation': 'Should be set to 1; mode=block'
+            }
         }
-    }
-    
-    if header not in header_checks:
-        return 'info', ''
-        
-    if value.endswith('not set'):
-        return 'bad', header_checks[header]['recommendation']
-        
-    if header_checks[header]['check'](value):
-        return 'good', ''
-    else:
-        return 'warning', header_checks[header]['recommendation']
+        self.user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        ]
+    def _check_hsts(self, value: str) -> bool:
+        """Check if HSTS header is properly configured"""
+        match = re.search(r'max-age=(\d+)', value.lower())
+        if not match:
+            return False
+        max_age = int(match.group(1))
+        return max_age >= MINIMUM_HSTS_AGE
 
-def print_colored_header(header, value, status, recommendation=''):
-    """Print header information with appropriate coloring"""
-    color = {
-        'good': Fore.GREEN,
-        'warning': Fore.YELLOW,
-        'bad': Fore.RED,
-        'info': Fore.CYAN
-        
-    }
-    status_symbol = {
-        'good': '✓',
-        'warning': '⚠',
-        'bad': '✗',
-        'info': 'ℹ'
-    }
-    
-    print(f"{color[status]}{status_symbol[status]} {header}: {value}{Style.RESET_ALL}")
-    if recommendation:
-        print(f"{Fore.YELLOW}   → Recommendation: {recommendation}{Style.RESET_ALL}")
+    def get_random_user_agent(self) -> str:
+        """Return a random user agent from the list"""
+        return random.choice(self.user_agents)
 
-def check_security_headers():
-    print(f"{Fore.CYAN}Security Headers Checker v2.0 By Ij{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}========================={Style.RESET_ALL}\n")
-    
-    website = input(f"{Fore.CYAN}Enter the website URL (e.g., https://example.com): {Style.RESET_ALL}").strip()
-    
-    if not website.startswith(('http://', 'https://')):
-        print(f"{Fore.RED}Error: Please provide a valid URL starting with http:// or https://{Style.RESET_ALL}")
-        return
-    
-    if not website.startswith('https://'):
-        print(f"{Fore.RED}Warning: The website is not using HTTPS. This is a security risk.{Style.RESET_ALL}")
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'DNT': '1',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Sec-Fetch-User': '?1'
-    }
-    try:
-        domain = urlparse(website).netloc
-        print(f"{Fore.YELLOW}Resolving domain {domain}...{Style.RESET_ALL}")
-        try:
-            socket.gethostbyname(domain)
-        except socket.gaierror:
-            print(f"{Fore.RED}Error: Cannot resolve domain {domain}. Please check if the URL is correct.{Style.RESET_ALL}")
-            return
-
-        print(f"{Fore.YELLOW}Connecting to {website}...{Style.RESET_ALL}")
-        with requests.Session() as session:
-            response = session.head(
-                website,
-                timeout=30,
-                headers=headers,
-                allow_redirects=True,
-                verify=True
-            )
-            if response.status_code >= 400:
-                response = session.get(website, timeout=30, headers=headers, allow_redirects=True)
-        security_headers = {
-            'Strict-Transport-Security': 'HSTS not set',
-            'Content-Security-Policy': 'CSP not set',
-            'X-Frame-Options': 'X-Frame-Options not set',
-            'X-Content-Type-Options': 'X-Content-Type-Options not set',
-            'Referrer-Policy': 'Referrer-Policy not set',
-            'Permissions-Policy': 'Permissions-Policy not set',
-            'X-XSS-Protection': 'X-XSS-Protection not set'
+    def get_request_headers(self) -> Dict[str, str]:
+        """Generate headers for the request"""
+        return {
+            'User-Agent': self.get_random_user_agent(),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
+            'TE': 'trailers'
         }
-        print(f"\n{Fore.CYAN}Results for {website}:{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}{'-' * 50}{Style.RESET_ALL}")
-        
-        missing_critical_headers = 0
-        warnings = 0
-        print(f"\n{Fore.CYAN}Security Headers Analysis:{Style.RESET_ALL}")
-        for header, missing_message in security_headers.items():
-            value = response.headers.get(header, missing_message)
-            status, recommendation = get_header_rating(header, value)
-            print_colored_header(header, value, status, recommendation)
-            if status == 'bad':
-                missing_critical_headers += 1
-            elif status == 'warning':
-                warnings += 1
-        print(f"\n{Fore.CYAN}Security Assessment Summary:{Style.RESET_ALL}")
-        if missing_critical_headers == 0 and warnings == 0:
-            print(f"{Fore.GREEN}✓ Excellent! All security headers are properly configured.{Style.RESET_ALL}")
-        elif missing_critical_headers == 0:
-            print(f"{Fore.YELLOW}⚠ Good, but some headers could be improved. See recommendations above.{Style.RESET_ALL}")
+
+    def is_blocked_response(self, response: requests.Response) -> bool:
+        """Check if the response indicates we're being blocked"""
+        blocked_indicators = [
+            'blocked',
+            'captcha',
+            'security check',
+            'detected automated',
+            'rate limit',
+            'access denied'
+        ]
+        content_type = response.headers.get('Content-Type', '').lower()
+        if 'text/html' in content_type:
+            text = response.text.lower()
+            return any(indicator in text for indicator in blocked_indicators)
+        return False
+    def make_request(self, session: requests.Session, url: str) -> Optional[requests.Response]:
+        """Make request with retry mechanism"""
+        for attempt in range(MAX_RETRIES):
+            try:
+                headers = self.get_request_headers()
+                if attempt > 0:
+                    delay = random.uniform(RETRY_DELAY_MIN, RETRY_DELAY_MAX)
+                    print(f"{Fore.YELLOW}Waiting {delay:.1f} seconds before retry...{Style.RESET_ALL}")
+                    time.sleep(delay)
+                
+                response = session.head(
+                    url,
+                    timeout=DEFAULT_TIMEOUT,
+                    headers=headers,
+                    allow_redirects=True,
+                    verify=True
+                )
+                if response.status_code >= 400 or self.is_blocked_response(response):
+                    response = session.get(
+                        url,
+                        timeout=DEFAULT_TIMEOUT,
+                        headers=headers,
+                        allow_redirects=True
+                    )
+                if self.is_blocked_response(response):
+                    if attempt == MAX_RETRIES - 1:
+                        print(f"{Fore.RED}Access appears to be blocked by the website.{Style.RESET_ALL}")
+                        return None
+                    continue
+                
+                return response
+                
+            except requests.exceptions.RequestException as e:
+                if attempt == MAX_RETRIES - 1:
+                    raise e
+                print(f"{Fore.YELLOW}Attempt {attempt + 1} failed, retrying...{Style.RESET_ALL}")
+        return None
+
+    def get_header_rating(self, header: str, value: str) -> Tuple[str, str]:
+        """Evaluate security headers and provide ratings and recommendations"""
+        if header not in self.header_checks:
+            return 'info', ''
+            
+        if value.endswith('not set'):
+            return 'bad', self.header_checks[header]['recommendation']
+            
+        if self.header_checks[header]['check'](value):
+            return 'good', ''
         else:
-            print(f"{Fore.RED}✗ Warning: {missing_critical_headers} critical headers are missing. Please address the recommendations above.{Style.RESET_ALL}")
+            return 'warning', self.header_checks[header]['recommendation']
 
-        print(f"\n{Fore.CYAN}Additional Response Headers:{Style.RESET_ALL}")
-        for header, value in response.headers.items():
-            if header not in security_headers:
-                print_colored_header(header, value, 'info')
-    except requests.exceptions.SSLError as e:
-        print(f"{Fore.RED}SSL Error: Cannot verify the website's security certificate.{Style.RESET_ALL}")
-        print(f"Details: {str(e)}")
-    except requests.exceptions.ConnectTimeout as e:
-        print(f"{Fore.RED}Connection Timeout Error: The server is taking too long to respond.{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}Troubleshooting steps:{Style.RESET_ALL}")
-        print("1. Check your internet connection")
-        print("2. Verify if the website is accessible in your browser")
-        print("3. The website might be blocking automated requests")
-        print("4. Try using a VPN or proxy if the site is geo-restricted")
-    
-    except requests.exceptions.ConnectionError as e:
-        print(f"{Fore.RED}Connection Error: Cannot establish connection to the server.{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}Possible causes:{Style.RESET_ALL}")
-        print("1. The website is blocking automated requests")
-        print("2. The website is down or unreachable")
-        print("3. Your internet connection is having issues")
-        print("4. A firewall is blocking the connection")
-    except requests.exceptions.RequestException as e:
-        print(f"{Fore.RED}Error checking headers: {str(e)}{Style.RESET_ALL}")
-        print("Please verify the website is accessible in your browser.")
+    def print_colored_header(self, header: str, value: str, status: str, recommendation: str = '') -> None:
+        """Print header information with appropriate coloring"""
+        color = {
+            'good': Fore.GREEN,
+            'warning': Fore.YELLOW,
+            'bad': Fore.RED,
+            'info': Fore.CYAN
+        }
+        status_symbol = {
+            'good': '✓',
+            'warning': '⚠',
+            'bad': '✗',
+            'info': 'ℹ'
+        }
+        print(f"{color[status]}{status_symbol[status]} {header}: {value}{Style.RESET_ALL}")
+        if recommendation:
+            print(f"{Fore.YELLOW}   → Recommendation: {recommendation}{Style.RESET_ALL}")
 
-if __name__ == "__main__":
+    def check_website(self, url: str) -> None:
+        """Main method to check website security headers"""
+        if not url.startswith(('http://', 'https://')):
+            print(f"{Fore.RED}Error: Please provide a valid URL starting with http:// or https://{Style.RESET_ALL}")
+            return
+        
+        if not url.startswith('https://'):
+            print(f"{Fore.RED}Warning: The website is not using HTTPS. This is a security risk.{Style.RESET_ALL}")
+        
+        try:
+            domain = urlparse(url).netloc
+            print(f"{Fore.YELLOW}Resolving domain {domain}...{Style.RESET_ALL}")
+            
+            try:
+                socket.gethostbyname(domain)
+            except socket.gaierror:
+                print(f"{Fore.RED}Error: Cannot resolve domain {domain}. Please check if the URL is correct.{Style.RESET_ALL}")
+                return
+
+            print(f"{Fore.YELLOW}Connecting to {url}...{Style.RESET_ALL}")
+            
+            with requests.Session() as session:
+                response = self.make_request(session, url)
+                if not response:
+                    return
+                    
+                security_headers = {
+                    'Strict-Transport-Security': 'HSTS not set',
+                    'Content-Security-Policy': 'CSP not set',
+                    'X-Frame-Options': 'X-Frame-Options not set',
+                    'X-Content-Type-Options': 'X-Content-Type-Options not set',
+                    'Referrer-Policy': 'Referrer-Policy not set',
+                    'Permissions-Policy': 'Permissions-Policy not set',
+                    'X-XSS-Protection': 'X-XSS-Protection not set'
+                }
+                
+                print(f"\n{Fore.CYAN}Results for {url}:{Style.RESET_ALL}")
+                print(f"{Fore.CYAN}{'-' * 50}{Style.RESET_ALL}")
+                
+                missing_critical_headers = 0
+                warnings = 0
+                
+                print(f"\n{Fore.CYAN}Security Headers Analysis:{Style.RESET_ALL}")
+                for header, missing_message in security_headers.items():
+                    value = response.headers.get(header, missing_message)
+                    status, recommendation = self.get_header_rating(header, value)
+                    self.print_colored_header(header, value, status, recommendation)
+                    
+                    if status == 'bad':
+                        missing_critical_headers += 1
+                    elif status == 'warning':
+                        warnings += 1
+
+                print(f"\n{Fore.CYAN}Security Assessment Summary:{Style.RESET_ALL}")
+                if missing_critical_headers == 0 and warnings == 0:
+                    print(f"{Fore.GREEN}✓ Excellent! All security headers are properly configured.{Style.RESET_ALL}")
+                elif missing_critical_headers == 0:
+                    print(f"{Fore.YELLOW}⚠ Good, but some headers could be improved. See recommendations above.{Style.RESET_ALL}")
+                else:
+                    print(f"{Fore.RED}✗ Warning: {missing_critical_headers} critical headers are missing. Please address the recommendations above.{Style.RESET_ALL}")
+
+                print(f"\n{Fore.CYAN}Additional Response Headers:{Style.RESET_ALL}")
+                for header, value in response.headers.items():
+                    if header not in security_headers:
+                        self.print_colored_header(header, value, 'info') 
+
+        except requests.exceptions.SSLError as e:
+            print(f"{Fore.RED}SSL Error: Cannot verify the website's security certificate.{Style.RESET_ALL}")
+            print(f"Details: {str(e)}")
+        except requests.exceptions.ConnectTimeout:
+            print(f"{Fore.RED}Connection Timeout Error: The server is taking too long to respond.{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}Troubleshooting steps:{Style.RESET_ALL}")
+            print("1. Check your internet connection")
+            print("2. Verify if the website is accessible in your browser")
+            print("3. The website might be blocking automated requests")
+            print("4. Try again later")
+        except requests.exceptions.ConnectionError:
+            print(f"{Fore.RED}Connection Error: Cannot establish connection to the server.{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}Possible causes:{Style.RESET_ALL}")
+            print("1. The website is blocking automated requests")
+            print("2. The website is down or unreachable")
+            print("3. Your internet connection is having issues")
+            print("4. A firewall is blocking the connection")
+        except requests.exceptions.RequestException as e:
+            print(f"{Fore.RED}Error checking headers: {str(e)}{Style.RESET_ALL}")
+            print("Please verify the website is accessible in your browser.")
+            
+def main():
+    """Main entry point of the script"""
+    print(f"{Fore.CYAN}========================={Style.RESET_ALL}")
+    print(f"{Fore.CYAN}Security Headers Checker v2.0 By Ij{Style.RESET_ALL}")
+    print(f"{Fore.YELLOW}GitHub: https://github.com/iheb2b/Security-Headers-Analyzer-{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}========================={Style.RESET_ALL}\n")
     try:
-        check_security_headers()
+        checker = SecurityHeaderChecker()
+        while True:
+            url = input(f"{Fore.CYAN}Enter the website URL (or 'quit' to exit): {Style.RESET_ALL}").strip()
+            if url.lower() in ['quit', 'exit', 'q']:
+                break
+            checker.check_website(url)
+            print("\n" + "="*50 + "\n")
+            
     except KeyboardInterrupt:
         print(f"\n{Fore.YELLOW}Script execution cancelled by user.{Style.RESET_ALL}")
     except Exception as e:
         print(f"\n{Fore.RED}Unexpected error: {str(e)}{Style.RESET_ALL}")
     finally:
         print(Style.RESET_ALL)
+
+if __name__ == "__main__":
+    main()
